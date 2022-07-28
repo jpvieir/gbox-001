@@ -3,7 +3,8 @@
 #define fs 16000
 
 #define maxdelay_chorus 100
-#define maxdelay_flanger 160
+#define maxdelay_flanger 80
+//#define maxdelay_flanger 221
 
 #define D1   276    //  23  476
 #define D2   594    //  297 594
@@ -36,17 +37,26 @@ SQ15x16 sinefixed(SQ15x16 arg){
     a1 = -z; a3 = pwr(z,3); a2 = pwr(z,2); a5 = a2*a3; a7= a5*a2;
     return (-z + factor3*a3 + factor5*a5 + factor7*a7);
 }
+
+SQ15x16 tangentfixed(SQ15x16 argt){
+  SQ15x16 factor3, factor5, factor7,factor9, a2, a3,a5,a7,a9;
+  factor3 = 1.0/3.0; factor5 = 2.0/15.0; factor7 = 17.0/315.0; factor9 = 62.0/2835.0; 
+  a3 = pwr(argt,3); a2=pwr(argt,2); a5 = a3*a2; a7 = a5*a2; a9 = a7*a2;
+  return (argt + factor3*a3 + factor5*a5 + factor7*a7 + factor9*a9);
+  }
 // variables : 
 // ARDUINO GENERAL:
 short in_ADC0, out_DAC0, input;
-int BTN0,BTN1,BTN2,BTN3,BTN4,BTN5,BTN6,BTN7, POT0, POT1, POT2;
+int BTN0,BTN1,BTN2,BTN3,BTN4,BTN5,BTN6,BTN7, POT0, POT1, POT2, POT3;
+int BT0,BT1,BT2,BT3,BT4,BT5,BT6,BT7;
 int count = 0; int effect = 8;
 
 
 /// effects: 
 // ECHO: 
 SQ15x16 echo_mix = 0.50;
-SQ15x16 echo_buffer[fs];
+//SQ15x16 echo_buffer[fs];
+SQ15x16 echo_buffer[16000];
 unsigned int Delay_Depth_echo, Delay_echo = 0, a_echo = 0;
 
 /////
@@ -67,7 +77,7 @@ int n,j=0;
 
 /////
 // FLANGER:
-SQ15x16   delay_flanger[maxdelay_flanger] = {0};
+SQ15x16   delay_flanger[maxdelay_flanger+2] = {0};
 SQ15x16   Delay2_flanger = 0;
 SQ15x16 delay_sr_flanger = 0;
 int  delay_int_flanger = 0;
@@ -95,13 +105,21 @@ int sample; SQ15x16 LFO, tremolo_mix;
 //uint16_t tremolo_Seno_table[fs];
 /////
 // LOW-PASS/HIGH-PASS: 
+short type;
+//float tangents[2048];
+int fc_hplp; 
+SQ15x16 xh[3], out_hplp, y, sqr2, frac_hplp, K,K2;
+SQ15x16 b0_hplp,b1_hplp,b2_hplp,a1_hplp,a2_hplp;
+SQ15x16 Q_hplp = 0.707;
+//float K,K2,fc_hplp;
 
 /////
 // WAH WAH:
+int n_wahwah = 0;
 int minf, maxf;
 SQ15x16 omega0, omega2, q, f, Input, InputBuffer[2], Output, OutputBuffer[2], fracw;
 SQ15x16 Input2, InputBuffer2[2], Output2, OutputBuffer2[2];
-SQ15x16  fmed, amp;
+SQ15x16  fmed= 1900.00; SQ15x16 amp = 1600.00;
 short t1,t2,cycle_time;
 const SQ15x16 pi = 3.14159; const SQ15x16 fsfixed = 16000.00; const SQ15x16 hundred = 100; const SQ15x16 erromax = 0.001; 
 // controle
@@ -192,7 +210,9 @@ short FUZZ(int POT0, SQ15x16 input){
     if ( in_0 > 0 ) in_0 =  0.98;
     if ( in_0 < 0 ) in_0 = -0.98;
   }
-  
+
+  fuzzmix = map(POT0, 0, 4095,1, 100);
+  fuzzmix = fuzzmix/100.0;
   out_DAC0 = (short)((in_0 + 1) * 2047);
   out_DAC0 = (short)((1-fuzzmix)*input + fuzzmix*out_DAC0);
   return out_DAC0;
@@ -222,46 +242,53 @@ short CHORUS(short POT0,short POT1,short input){
      out_DAC0 = static_cast<short>(chorus_DELAY[chorus_delay_int+1]*frac + chorus_DELAY[chorus_delay_int]*(1-frac));
 
      if (out_DAC0 <=0 ) out_DAC0 = 0.01;
+
+     return out_DAC0;
  }
 
-short TREMOLO(short POT0, short POT1, short input){
+short TREMOLO(short POT0, short POT1, SQ15x16 input){
 
-  LFO = map(POT0,0,4095,50,150);
+  LFO = map(POT0,0,4095,100,250);
   LFO = LFO/100.00;
-  out_DAC0 = static_cast<short>(input*sinefixed(2*PI*LFO*sample/fs));
-  tremolo_mix =map(POT1,1,4095,0,100); tremolo_mix = tremolo_mix/100.00;
+  out_DAC0 = static_cast<short>(input*sinefixed(2*PI*LFO/fsfixed*sample));
+  tremolo_mix =map(POT1,0,4095,0,100); tremolo_mix = tremolo_mix/100.00;
   out_DAC0 = static_cast<short>((1-tremolo_mix)*input + (tremolo_mix)*out_DAC0);
+ //out_DAC0 = (short)((1-tremolo_mix)*input);
   sample++;
-  if (LFO*sample >= fs) sample = 0;
+  if (LFO*sample >= fs){ sample = 0;}
+
+  return out_DAC0;
 
 }
 
-short WAHWAH(short POT0, short POT1, short POT2, short input){
-
-    fosc_i = map(POT0,0,4095,100,250); fosc = fosc_i/100.0;
-    mix_i = map(POT1,0,4095,0,100); mix = mix_i/100.0;
-    Qi = map(POT2,0,4095,100,400); Q = Qi/100.0;
+short WAHWAH(short POT0, short POT1, short POT2, SQ15x16 input){
+  Input = input;
+  
     
-    arg = (2*pi*fosc/fsfixed)*n;
+    arg = (2*pi*fosc/fsfixed)*n_wahwah;
     if (arg>(2*pi)){arg = arg - 2*pi;}
     
    f = fmed + amp*sinefixed(arg);
-   omega0 = 2 * pi * (f) / fs; omega2 = omega0 * omega0; q = (2/Q)*omega0; fracw = 4 + q + omega2;
-   a = q*(Input - InputBuffer[n%2]); b = (2*omega2 - 8)*OutputBuffer[(n+1)%2]; 
-   c = (4 - q + omega2)*OutputBuffer[n%2];
+   omega0 = 2 * pi * (f) / fs; omega2 = omega0 * omega0; q = (2.00/Q)*omega0; fracw = 4 + q + omega2;
+   a = q*(Input - InputBuffer[n_wahwah%2]); b = (2*omega2 - 8)*OutputBuffer[(n_wahwah+1)%2]; 
+   c = (4 - q + omega2)*OutputBuffer[n_wahwah%2];
     Output = (a-b-c)/frac;
-    InputBuffer[n%2] = Input; OutputBuffer[n%2] = Output;
+    InputBuffer[n_wahwah%2] = Input; OutputBuffer[n_wahwah%2] = Output;
+    
      n++;
-    if((n*fosc)>=fs){n=0;}
+    if((n_wahwah*fosc)>=fs){n_wahwah=0;}
 
  // saida:
     Output = Input*(1-mix) + mix*Output;
-    out_DAC0= (short)(Output);
+    out_DAC0= (short)Output;
+
+    return out_DAC0;
 
 }
 
 short FLANGER(short POT0, short POT1, short input){
-   POT0=map(POT0>>2,0,1024,1,maxdelay_flanger); //empirical adjusts
+ 
+      POT0=map(POT0>>2,0,1024,1,maxdelay_flanger); //empirical adjusts
     Delay2_flanger = POT0/2;
 
 
@@ -273,14 +300,43 @@ short FLANGER(short POT0, short POT1, short input){
     
     POT1=map(POT1>>2,0,1024,1,4); // empirical adjusts
    
-    delay_sr_flanger = Delay2_flanger - Delay2_flanger*sin(2*M_PI*POT1*j/fs); 
+    delay_sr_flanger = Delay2_flanger - Delay2_flanger*sinefixed(2*pi*POT1/fsfixed*j); 
     delay_int_flanger = int(delay_sr_flanger);
     frac_flanger = delay_sr_flanger - delay_int_flanger;
-    if (frac_flanger == 0) frac = 0.01;      // Ajusts
-    if (frac_flanger == 1) frac = 0.99;      //
+    if (frac_flanger == 0) frac_flanger  = 0.01;      // Ajusts
+    if (frac_flanger == 1) frac_flanger  = 0.99;      //
 
     j++;
     if (j*POT1>=fs) j = 0;  
 
+ 
      out_DAC0 = static_cast<short>(delay_flanger[delay_int_flanger+2]*frac_flanger + delay_flanger[delay_int_flanger]*(1-frac_flanger));
+     return out_DAC0;
 }
+
+short LPHP(short POT0,short input){
+
+   // if (POT0>2048){
+      fc_hplp = POT0;
+      type = 0;
+  //  }
+//    else{
+//      fc = map(POT0,0,2048,5000,80);
+      //type = 1;
+ //   }
+ //K2 = tan(M_PI/fs*fc_hplp); K =  (K2-1)/(K2+1);
+   //K = (tangentfixed(pi/fsfixed*fc_hplp) -1)/(tangentfixed(pi/fsfixed*fc_hplp) +1);
+//   K = (tangents[fc_hplp]-1)/(tangents[fc_hplp] + 1);
+
+   xh[1] = input - K*xh[0];
+   y =  K*xh[1] + xh[0];
+   if (type == 0) {y = 0.5*(input + y);}
+   
+   xh[0] = xh[1];
+
+    out_DAC0 = (short)y;
+    
+    
+    //out_DAC0= static_cast<short>(out_hplp); 
+    return out_DAC0;
+ }
